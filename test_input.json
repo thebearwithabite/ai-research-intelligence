@@ -1,5 +1,11 @@
 {
   "input": {
-    "name": "John Doe"
+    "newsletters": [
+      "https://garymarcus.substack.com",
+      "https://magazine.sebastianraschka.com",
+      "https://oneusefulthing.substack.com"
+    ],
+    "posts_per_newsletter": 2,
+    "include_outreach_strategy": true
   }
 }
