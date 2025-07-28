@@ -1,0 +1,38 @@
+agent_id: "agent_001"
+default_model: "claude-3-opus"
+fallback_model: "gpt-3.5-turbo"
+
+models:
+  claude-3-opus:
+    provider: "anthropic"
+    api_key: "${ANTHROPIC_API_KEY}"
+    max_tokens: 4000
+    system_prompt: |
+      You are a mission-critical agent tasked with completing cognitive and digital operations.
+      Operate with high clarity, speed, and ethical precision. Ask for clarification when necessary.
+
+  gpt-3.5-turbo:
+    provider: "openai"
+    api_key: "${OPENAI_API_KEY}"
+    max_tokens: 3000
+    temperature: 0.3
+
+tools:
+  - name: "web_search"
+    module: "tools.web_search"
+    enabled: true
+  - name: "file_tools"
+    module: "tools.file_tools"
+    enabled: true
+
+logging:
+  level: "INFO"
+  output: "logs/agent.log"
+  rotate_daily: true
+
+memory:
+  provider: "sqlite"
+  path: "memory/agent_001.db"
+
+loop_interval_sec: 60
+heartbeat: true
