@@ -8,6 +8,9 @@ from datetime import datetime
 from typing import Dict, List, Any
 import feedparser
 from bs4 import BeautifulSoup
+import socket
+import ipaddress
+from urllib.parse import urlparse
 
 # Configuration
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
@@ -26,6 +29,29 @@ RESEARCH_TARGETS = {
     'cameron_wolfe': 'https://cameronrwolfe.substack.com'
 }
 
+def is_safe_url(url: str) -> bool:
+    """Check if a URL is safe to request (prevents SSRF)"""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ('http', 'https'):
+            return False
+
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+
+        # Resolve hostname to IP
+        ip_str = socket.gethostbyname(hostname)
+        ip = ipaddress.ip_address(ip_str)
+
+        # Check if private, loopback, or link-local
+        if ip.is_private or ip.is_loopback or ip.is_link_local:
+            return False
+
+        return True
+    except Exception:
+        return False
+
 def extract_substack_content(newsletter_url: str, max_posts: int = 5) -> List[Dict]:
     """Extract recent posts from Substack using RSS and web scraping"""
     posts = []
@@ -33,10 +59,19 @@ def extract_substack_content(newsletter_url: str, max_posts: int = 5) -> List[Di
     try:
         # Try RSS feed first (most reliable)
         rss_url = f"{newsletter_url}/feed"
+
+        # Validate URL before parsing
+        if not is_safe_url(rss_url):
+            print(f"Skipping unsafe URL: {rss_url}")
+            return []
+
         feed = feedparser.parse(rss_url)
         
         for entry in feed.entries[:max_posts]:
             # Get full content by scraping the actual post
+            if not entry.get('link'):
+                continue
+
             full_content = scrape_post_content(entry.link)
             
             post_data = {
@@ -61,6 +96,10 @@ def extract_substack_content(newsletter_url: str, max_posts: int = 5) -> List[Di
 
 def scrape_post_content(post_url: str) -> str:
     """Scrape full content from a Substack post"""
+    if not is_safe_url(post_url):
+        print(f"Skipping unsafe post URL: {post_url}")
+        return ""
+
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (compatible; AI Research Bot/1.0)'
