@@ -4,6 +4,9 @@ import json
 import os
 import time
 import re
+import socket
+import ipaddress
+from urllib.parse import urlparse
 from datetime import datetime
 from typing import Dict, List, Any
 import feedparser
@@ -26,8 +29,42 @@ RESEARCH_TARGETS = {
     'cameron_wolfe': 'https://cameronrwolfe.substack.com'
 }
 
+def is_safe_url(url: str) -> bool:
+    """Validate that the URL is safe to fetch (prevents SSRF)"""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ('http', 'https'):
+            return False
+
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+
+        # Resolve hostname to IP
+        try:
+            ip = socket.gethostbyname(hostname)
+        except socket.gaierror:
+            return False
+
+        # Check if IP is private/loopback/reserved
+        ip_addr = ipaddress.ip_address(ip)
+        if (ip_addr.is_private or
+            ip_addr.is_loopback or
+            ip_addr.is_reserved or
+            ip_addr.is_link_local or
+            ip_addr.is_multicast):
+            return False
+
+        return True
+    except Exception:
+        return False
+
 def extract_substack_content(newsletter_url: str, max_posts: int = 5) -> List[Dict]:
     """Extract recent posts from Substack using RSS and web scraping"""
+    if not is_safe_url(newsletter_url):
+        print(f"⚠️ Blocked potentially unsafe URL: {newsletter_url}")
+        return []
+
     posts = []
     
     try:
@@ -37,7 +74,10 @@ def extract_substack_content(newsletter_url: str, max_posts: int = 5) -> List[Di
         
         for entry in feed.entries[:max_posts]:
             # Get full content by scraping the actual post
-            full_content = scrape_post_content(entry.link)
+            if is_safe_url(entry.link):
+                full_content = scrape_post_content(entry.link)
+            else:
+                full_content = ""
             
             post_data = {
                 'title': entry.get('title', ''),
