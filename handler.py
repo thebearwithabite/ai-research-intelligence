@@ -4,6 +4,9 @@ import json
 import os
 import time
 import re
+import socket
+import ipaddress
+from urllib.parse import urlparse
 from datetime import datetime
 from typing import Dict, List, Any
 import feedparser
@@ -26,18 +29,56 @@ RESEARCH_TARGETS = {
     'cameron_wolfe': 'https://cameronrwolfe.substack.com'
 }
 
+def is_safe_url(url: str) -> bool:
+    """Validate URL to prevent SSRF attacks"""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ('http', 'https'):
+            return False
+
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+
+        # Resolve hostname to IP to check for private addresses
+        try:
+            ip_str = socket.gethostbyname(hostname)
+        except socket.gaierror:
+            return False
+
+        ip = ipaddress.ip_address(ip_str)
+
+        # Block private, loopback, link-local (169.254.x.x), multicast, reserved
+        if (ip.is_private or ip.is_loopback or ip.is_link_local or
+            ip.is_multicast or ip.is_reserved):
+            return False
+
+        return True
+    except Exception:
+        return False
+
 def extract_substack_content(newsletter_url: str, max_posts: int = 5) -> List[Dict]:
     """Extract recent posts from Substack using RSS and web scraping"""
     posts = []
     
     try:
+        if not is_safe_url(newsletter_url):
+            print(f"⚠️ Unsafe newsletter URL detected: {newsletter_url}")
+            return []
+
         # Try RSS feed first (most reliable)
         rss_url = f"{newsletter_url}/feed"
         feed = feedparser.parse(rss_url)
         
         for entry in feed.entries[:max_posts]:
+            # Verify the entry link is safe before scraping
+            post_link = entry.get('link', '')
+            if not is_safe_url(post_link):
+                print(f"⚠️ Skipping unsafe post URL: {post_link}")
+                continue
+
             # Get full content by scraping the actual post
-            full_content = scrape_post_content(entry.link)
+            full_content = scrape_post_content(post_link)
             
             post_data = {
                 'title': entry.get('title', ''),
@@ -61,6 +102,10 @@ def extract_substack_content(newsletter_url: str, max_posts: int = 5) -> List[Di
 
 def scrape_post_content(post_url: str) -> str:
     """Scrape full content from a Substack post"""
+    if not is_safe_url(post_url):
+        print(f"⚠️ Unsafe post URL detected in scrape: {post_url}")
+        return ""
+
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (compatible; AI Research Bot/1.0)'
