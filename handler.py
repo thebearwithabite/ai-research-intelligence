@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Dict, List, Any
 import feedparser
 from bs4 import BeautifulSoup
+from security_utils import is_safe_url
 
 # Configuration
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
@@ -29,10 +30,19 @@ RESEARCH_TARGETS = {
 def extract_substack_content(newsletter_url: str, max_posts: int = 5) -> List[Dict]:
     """Extract recent posts from Substack using RSS and web scraping"""
     posts = []
+
+    if not is_safe_url(newsletter_url):
+        print(f"Skipping unsafe newsletter URL: {newsletter_url}")
+        return posts
     
     try:
         # Try RSS feed first (most reliable)
         rss_url = f"{newsletter_url}/feed"
+
+        if not is_safe_url(rss_url):
+            print(f"Skipping unsafe RSS URL: {rss_url}")
+            return posts
+
         feed = feedparser.parse(rss_url)
         
         for entry in feed.entries[:max_posts]:
@@ -61,6 +71,10 @@ def extract_substack_content(newsletter_url: str, max_posts: int = 5) -> List[Di
 
 def scrape_post_content(post_url: str) -> str:
     """Scrape full content from a Substack post"""
+    if not is_safe_url(post_url):
+        print(f"Skipping unsafe post URL: {post_url}")
+        return ""
+
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (compatible; AI Research Bot/1.0)'
