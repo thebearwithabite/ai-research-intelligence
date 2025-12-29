@@ -79,10 +79,19 @@ def scrape_post_content(post_url: str) -> str:
         headers = {
             'User-Agent': 'Mozilla/5.0 (compatible; AI Research Bot/1.0)'
         }
-        response = requests.get(post_url, headers=headers, timeout=10)
+        # Security: Use stream=True and limit size to prevent memory exhaustion
+        response = requests.get(post_url, headers=headers, timeout=10, stream=True)
         
         if response.status_code == 200:
-            soup = BeautifulSoup(response.content, 'html.parser')
+            # Read content with size limit (e.g. 1MB)
+            content_bytes = b""
+            for chunk in response.iter_content(chunk_size=8192):
+                content_bytes += chunk
+                if len(content_bytes) > 1024 * 1024:  # 1MB limit
+                    print(f"⚠️ Truncated large post: {post_url}")
+                    break
+
+            soup = BeautifulSoup(content_bytes, 'html.parser')
             
             # Find the main content area (Substack specific)
             content_div = soup.find('div', class_='post-content')
@@ -267,6 +276,15 @@ def handler(event):
     posts_per_newsletter = job_input.get('posts_per_newsletter', 3)
     include_outreach_strategy = job_input.get('include_outreach_strategy', True)
     
+    # Security: Limit input to prevent resource exhaustion
+    if len(newsletters) > 20:
+        print(f"⚠️ Truncating newsletters list from {len(newsletters)} to 20")
+        newsletters = newsletters[:20]
+
+    if posts_per_newsletter > 10:
+        print(f"⚠️ Limiting posts_per_newsletter from {posts_per_newsletter} to 10")
+        posts_per_newsletter = 10
+
     print(f"🔍 Starting research intelligence collection...")
     print(f"📊 Targeting {len(newsletters)} newsletters, {posts_per_newsletter} posts each")
     
