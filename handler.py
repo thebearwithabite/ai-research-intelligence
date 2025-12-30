@@ -13,6 +13,11 @@ from security_utils import is_safe_url
 # Configuration
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
 
+# Security limits
+MAX_NEWSLETTERS = 10
+MAX_POSTS_PER_NEWSLETTER = 5
+MAX_CONTENT_LENGTH = 5 * 1024 * 1024  # 5MB
+
 # Target AI consciousness researchers and newsletters
 RESEARCH_TARGETS = {
     'sebastian_raschka': 'https://magazine.sebastianraschka.com',
@@ -79,10 +84,19 @@ def scrape_post_content(post_url: str) -> str:
         headers = {
             'User-Agent': 'Mozilla/5.0 (compatible; AI Research Bot/1.0)'
         }
-        response = requests.get(post_url, headers=headers, timeout=10)
+        # Stream response to check size
+        response = requests.get(post_url, headers=headers, timeout=10, stream=True)
         
         if response.status_code == 200:
-            soup = BeautifulSoup(response.content, 'html.parser')
+            content = b""
+            # Read in chunks to enforce size limit
+            for chunk in response.iter_content(chunk_size=8192):
+                content += chunk
+                if len(content) > MAX_CONTENT_LENGTH:
+                    print(f"Skipping {post_url}: Content too large")
+                    return ""
+
+            soup = BeautifulSoup(content, 'html.parser')
             
             # Find the main content area (Substack specific)
             content_div = soup.find('div', class_='post-content')
@@ -264,7 +278,13 @@ def handler(event):
     
     # Configuration from input
     newsletters = job_input.get('newsletters', list(RESEARCH_TARGETS.values()))
+    # Enforce limits
+    if isinstance(newsletters, list):
+        newsletters = newsletters[:MAX_NEWSLETTERS]
+
     posts_per_newsletter = job_input.get('posts_per_newsletter', 3)
+    posts_per_newsletter = min(posts_per_newsletter, MAX_POSTS_PER_NEWSLETTER)
+
     include_outreach_strategy = job_input.get('include_outreach_strategy', True)
     
     print(f"🔍 Starting research intelligence collection...")
