@@ -1,4 +1,4 @@
-## 2024-05-23 - [SSRF Protection in Python Scrapers]
-**Vulnerability:** Unrestricted URL fetching in `feedparser` and `requests` allowed potential access to local/internal network resources (SSRF).
-**Learning:** Standard libraries like `requests` do not have built-in SSRF protection (blocking private IPs). Validating URLs requires checking both the initial URL and resolving the hostname to ensure it doesn't point to a private IP (DNS rebinding risk exists but basic checks help).
-**Prevention:** Implement a reusable `is_safe_url` utility that checks for allowed schemes (http/https) and validates that the hostname resolves to a public IP address before making any request.
+## 2024-05-23 - [DoS Protection via Input Limits]
+**Vulnerability:** Unbounded input processing in `handler.py` allowed users to specify an unlimited number of newsletters and posts, and `scrape_post_content` read full responses into memory. This created a Denial of Service (DoS) risk via resource exhaustion (CPU/Memory) and potential timeout abuse.
+**Learning:** Serverless functions, while scalable, are still susceptible to application-level DoS if input processing logic is linear and unbounded. Streaming HTTP responses with size limits is crucial when fetching untrusted content to prevent memory exhaustion.
+**Prevention:** Always enforce strict upper bounds on all user-supplied collection inputs (lists, counts) and use streaming with size checks for external resource fetching.
