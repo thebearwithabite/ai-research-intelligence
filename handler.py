@@ -27,8 +27,17 @@ RESEARCH_TARGETS = {
     'cameron_wolfe': 'https://cameronrwolfe.substack.com'
 }
 
+# DoS Protection Limits
+MAX_NEWSLETTERS = 10
+MAX_POSTS_PER_NEWSLETTER = 5
+MAX_SCRAPED_CONTENT_LENGTH = 5000  # Characters for final content
+MAX_RESPONSE_SIZE_BYTES = 1024 * 1024 * 2  # 2MB limit for raw download
+
 def extract_substack_content(newsletter_url: str, max_posts: int = 5) -> List[Dict]:
     """Extract recent posts from Substack using RSS and web scraping"""
+    # Enforce hard limit
+    max_posts = min(max_posts, MAX_POSTS_PER_NEWSLETTER)
+
     posts = []
 
     if not is_safe_url(newsletter_url):
@@ -79,10 +88,20 @@ def scrape_post_content(post_url: str) -> str:
         headers = {
             'User-Agent': 'Mozilla/5.0 (compatible; AI Research Bot/1.0)'
         }
-        response = requests.get(post_url, headers=headers, timeout=10)
         
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.content, 'html.parser')
+        # Use stream=True to prevent loading massive files into memory
+        with requests.get(post_url, headers=headers, timeout=10, stream=True) as response:
+            if response.status_code != 200:
+                return ""
+
+            # Read only the first N bytes to prevent DoS via massive content
+            content_bytes = b""
+            for chunk in response.iter_content(chunk_size=8192):
+                content_bytes += chunk
+                if len(content_bytes) > MAX_RESPONSE_SIZE_BYTES:
+                    break
+
+            soup = BeautifulSoup(content_bytes, 'html.parser')
             
             # Find the main content area (Substack specific)
             content_div = soup.find('div', class_='post-content')
@@ -264,7 +283,17 @@ def handler(event):
     
     # Configuration from input
     newsletters = job_input.get('newsletters', list(RESEARCH_TARGETS.values()))
+    # Enforce limit on number of newsletters
+    if len(newsletters) > MAX_NEWSLETTERS:
+        print(f"⚠️ Truncating newsletters list from {len(newsletters)} to {MAX_NEWSLETTERS}")
+        newsletters = newsletters[:MAX_NEWSLETTERS]
+
     posts_per_newsletter = job_input.get('posts_per_newsletter', 3)
+    # Enforce limit on posts per newsletter
+    if posts_per_newsletter > MAX_POSTS_PER_NEWSLETTER:
+        print(f"⚠️ Capping posts_per_newsletter from {posts_per_newsletter} to {MAX_POSTS_PER_NEWSLETTER}")
+        posts_per_newsletter = MAX_POSTS_PER_NEWSLETTER
+
     include_outreach_strategy = job_input.get('include_outreach_strategy', True)
     
     print(f"🔍 Starting research intelligence collection...")
