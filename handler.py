@@ -13,6 +13,11 @@ from security_utils import is_safe_url
 # Configuration
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
 
+# Security limits
+MAX_NEWSLETTERS = 10
+MAX_POSTS_PER_NEWSLETTER = 5
+MAX_SCRAPED_CONTENT_LENGTH = 5000
+
 # Target AI consciousness researchers and newsletters
 RESEARCH_TARGETS = {
     'sebastian_raschka': 'https://magazine.sebastianraschka.com',
@@ -266,6 +271,19 @@ def handler(event):
     newsletters = job_input.get('newsletters', list(RESEARCH_TARGETS.values()))
     posts_per_newsletter = job_input.get('posts_per_newsletter', 3)
     include_outreach_strategy = job_input.get('include_outreach_strategy', True)
+
+    # Security validation
+    if not isinstance(newsletters, list):
+        return {"error": "Input 'newsletters' must be a list of URLs"}
+
+    if len(newsletters) > MAX_NEWSLETTERS:
+        return {"error": f"Too many newsletters. Max allowed: {MAX_NEWSLETTERS}"}
+
+    if not isinstance(posts_per_newsletter, int):
+        return {"error": "Input 'posts_per_newsletter' must be an integer"}
+
+    if posts_per_newsletter > MAX_POSTS_PER_NEWSLETTER:
+        return {"error": f"Too many posts per newsletter. Max allowed: {MAX_POSTS_PER_NEWSLETTER}"}
     
     print(f"🔍 Starting research intelligence collection...")
     print(f"📊 Targeting {len(newsletters)} newsletters, {posts_per_newsletter} posts each")
