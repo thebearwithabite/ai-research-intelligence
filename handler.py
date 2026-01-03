@@ -8,7 +8,9 @@ from datetime import datetime
 from typing import Dict, List, Any
 import feedparser
 from bs4 import BeautifulSoup
-from security_utils import is_safe_url
+import socket
+import ipaddress
+from urllib.parse import urlparse
 
 # Configuration
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
@@ -61,6 +63,9 @@ def extract_substack_content(newsletter_url: str, max_posts: int = 5) -> List[Di
         
         for entry in feed.entries[:max_posts]:
             # Get full content by scraping the actual post
+            if not entry.get('link'):
+                continue
+
             full_content = scrape_post_content(entry.link)
             
             post_data = {
