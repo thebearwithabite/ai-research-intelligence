@@ -1,7 +1,4 @@
-## 2024-05-23 - [DoS Protection via Input/Network Limits]
-**Vulnerability:** The serverless handler was susceptible to Denial of Service (DoS) and Out-of-Memory (OOM) crashes because it accepted unlimited lists of newsletter URLs, unlimited posts per newsletter, and downloaded entire response bodies into memory without size checks.
-**Learning:** `requests.get()` without `stream=True` downloads the full content immediately. In a memory-constrained environment (like serverless pods), this is a trivial vector for crashing the service by pointing it to a large file (e.g., 10GB ISO).
-**Prevention:**
-1. Enforce hard limits on all list inputs (e.g., `MAX_NEWSLETTERS`).
-2. Always use `requests.get(stream=True)` for user-provided URLs.
-3. Read the response stream in chunks and count bytes, aborting if the size exceeds a safety threshold (e.g., 2MB).
+## 2026-01-03 - SSRF Bypass via HTTP Redirects
+**Vulnerability:** Standard HTTP libraries like `requests` and `feedparser` follow redirects by default. An attacker can provide a safe URL (e.g., to their own server) that redirects to an internal, sensitive address (e.g., `http://localhost` or `http://169.254.169.254`). This bypasses initial URL validation checks.
+**Learning:** Checking a URL with `is_safe_url` *before* the request is insufficient if the library automatically follows redirects. The check must be performed at *every* hop of the redirect chain.
+**Prevention:** Use a custom request wrapper (like `safe_requests_get`) that disables automatic redirects (`allow_redirects=False`) and manually handles the redirect loop, validating the `Location` header against the security policy before following it.

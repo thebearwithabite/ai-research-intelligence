@@ -1,6 +1,64 @@
 import ipaddress
 import socket
-from urllib.parse import urlparse
+import requests
+from urllib.parse import urlparse, urljoin
+
+def safe_requests_get(url: str, max_redirects: int = 5, **kwargs) -> requests.Response:
+    """
+    Safely performs a GET request, checking for SSRF at each redirect.
+    Use this instead of requests.get() when fetching user-provided URLs.
+    """
+    # Enforce no auto-redirects
+    kwargs['allow_redirects'] = False
+
+    session = requests.Session()
+    current_url = url
+
+    # We maintain our own history list to emulate requests behavior
+    history = []
+
+    for _ in range(max_redirects + 1):
+        if not is_safe_url(current_url):
+            # Clean up potentially open sockets in history
+            for resp in history:
+                resp.close()
+            raise ValueError(f"Unsafe URL detected: {current_url}")
+
+        try:
+            resp = session.get(current_url, **kwargs)
+        except Exception:
+            # Clean up history on error
+            for r in history:
+                r.close()
+            raise
+
+        if resp.is_redirect:
+            # Consume content to release connection if we're redirecting
+            # (unless stream=True was requested, but for redirects we usually want to follow)
+            # Actually, requests auto-handling reads content for redirects usually.
+            # Here we should read content unless we want to forward stream.
+            # But typically redirects have empty bodies.
+            resp.close()
+
+            # Add to history (we need a deep copy or just the object?)
+            # requests adds the response object to history.
+            history.append(resp)
+
+            location = resp.headers.get('Location')
+            if not location:
+                return resp
+
+            # Handle relative redirects
+            current_url = urljoin(current_url, location)
+            continue
+        else:
+            resp.history = history
+            return resp
+
+    # Clean up
+    for r in history:
+        r.close()
+    raise ValueError(f"Too many redirects (max {max_redirects})")
 
 def is_safe_url(url: str) -> bool:
     """
