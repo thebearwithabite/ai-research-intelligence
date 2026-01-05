@@ -21,13 +21,13 @@ class TestHandlerDoS(unittest.TestCase):
 
         result = handler(event)
 
-        # Expect error
-        self.assertIsInstance(result, dict)
-        self.assertIn("error", result)
-        self.assertIn(f"Max allowed: {MAX_NEWSLETTERS}", result["error"])
+        # The handler now truncates the list instead of returning an error
+        # So we should check that it didn't return an error and processed only MAX_NEWSLETTERS
+        self.assertNotIn("error", result)
+        self.assertEqual(result['newsletters_scanned'], MAX_NEWSLETTERS)
 
-        # Verify no processing happened
-        mock_extract.assert_not_called()
+        # Verify only MAX_NEWSLETTERS were processed
+        self.assertEqual(mock_extract.call_count, MAX_NEWSLETTERS)
 
     @patch('handler.extract_substack_content')
     @patch('handler.analyze_research_intelligence')
@@ -46,13 +46,11 @@ class TestHandlerDoS(unittest.TestCase):
 
         result = handler(event)
 
-        # Expect error
-        self.assertIsInstance(result, dict)
-        self.assertIn("error", result)
-        self.assertIn(f"Max allowed: {MAX_POSTS_PER_NEWSLETTER}", result["error"])
+        # The handler caps the posts_per_newsletter instead of returning error
+        self.assertNotIn("error", result)
 
-        # Verify no processing happened
-        mock_extract.assert_not_called()
+        # Verify call was made with capped limit
+        mock_extract.assert_called_with('http://example.com/1', MAX_POSTS_PER_NEWSLETTER)
 
     @patch('handler.extract_substack_content')
     @patch('handler.analyze_research_intelligence')
