@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 import socket
 import ipaddress
 from urllib.parse import urlparse
+from security_utils import is_safe_url, safe_requests_get
 
 # Configuration
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
@@ -55,11 +56,28 @@ def extract_substack_content(newsletter_url: str, max_posts: int = 5) -> List[Di
         # Try RSS feed first (most reliable)
         rss_url = f"{newsletter_url}/feed"
 
-        if not is_safe_url(rss_url):
-            print(f"Skipping unsafe RSS URL: {rss_url}")
-            return posts
+        # Use safe_requests_get to fetch the RSS content safely
+        try:
+            # We use stream=True but read it all since feedparser needs bytes
+            response = safe_requests_get(rss_url, timeout=10, stream=True)
+            if response.status_code != 200:
+                print(f"Failed to fetch RSS feed from {rss_url}: {response.status_code}")
+                return posts
 
-        feed = feedparser.parse(rss_url)
+            # Read content with size limit
+            content_bytes = b""
+            for chunk in response.iter_content(chunk_size=8192):
+                content_bytes += chunk
+                if len(content_bytes) > MAX_RESPONSE_SIZE_BYTES:
+                    print(f"RSS feed too large: {rss_url}")
+                    return posts
+
+            # Parse the content bytes directly
+            feed = feedparser.parse(content_bytes)
+
+        except Exception as e:
+            print(f"Error fetching RSS feed {rss_url}: {str(e)}")
+            return posts
         
         for entry in feed.entries[:max_posts]:
             # Get full content by scraping the actual post
@@ -90,6 +108,8 @@ def extract_substack_content(newsletter_url: str, max_posts: int = 5) -> List[Di
 
 def scrape_post_content(post_url: str) -> str:
     """Scrape full content from a Substack post"""
+    # We rely on safe_requests_get to check the URL at every hop
+    # But checking the initial URL is also good practice
     if not is_safe_url(post_url):
         print(f"Skipping unsafe post URL: {post_url}")
         return ""
@@ -99,8 +119,11 @@ def scrape_post_content(post_url: str) -> str:
             'User-Agent': 'Mozilla/5.0 (compatible; AI Research Bot/1.0)'
         }
         
-        # Use stream=True to prevent loading massive files into memory
-        with requests.get(post_url, headers=headers, timeout=10, stream=True) as response:
+        # Use safe_requests_get instead of requests.get
+        # safe_requests_get supports **kwargs so stream=True works
+        response = safe_requests_get(post_url, headers=headers, timeout=10, stream=True)
+
+        with response:
             if response.status_code != 200:
                 return ""
 
@@ -198,6 +221,7 @@ Focus on the human elements and narrative potential, not just technical content.
             ]
         }
         
+        # We don't use safe_requests_get here because we are hitting a known public API
         response = requests.post(
             'https://api.anthropic.com/v1/messages',
             headers=headers,
@@ -293,6 +317,10 @@ def handler(event):
     
     # Configuration from input
     newsletters = job_input.get('newsletters', list(RESEARCH_TARGETS.values()))
+    # Security validation first
+    if not isinstance(newsletters, list):
+        return {"error": "Input 'newsletters' must be a list of URLs"}
+
     # Enforce limit on number of newsletters
     if len(newsletters) > MAX_NEWSLETTERS:
         print(f"⚠️ Truncating newsletters list from {len(newsletters)} to {MAX_NEWSLETTERS}")
@@ -305,19 +333,6 @@ def handler(event):
         posts_per_newsletter = MAX_POSTS_PER_NEWSLETTER
 
     include_outreach_strategy = job_input.get('include_outreach_strategy', True)
-
-    # Security validation
-    if not isinstance(newsletters, list):
-        return {"error": "Input 'newsletters' must be a list of URLs"}
-
-    if len(newsletters) > MAX_NEWSLETTERS:
-        return {"error": f"Too many newsletters. Max allowed: {MAX_NEWSLETTERS}"}
-
-    if not isinstance(posts_per_newsletter, int):
-        return {"error": "Input 'posts_per_newsletter' must be an integer"}
-
-    if posts_per_newsletter > MAX_POSTS_PER_NEWSLETTER:
-        return {"error": f"Too many posts per newsletter. Max allowed: {MAX_POSTS_PER_NEWSLETTER}"}
     
     print(f"🔍 Starting research intelligence collection...")
     print(f"📊 Targeting {len(newsletters)} newsletters, {posts_per_newsletter} posts each")
