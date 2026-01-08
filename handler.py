@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 import socket
 import ipaddress
 from urllib.parse import urlparse
+from security_utils import is_safe_url, safe_requests_get
 
 # Configuration
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
@@ -55,11 +56,9 @@ def extract_substack_content(newsletter_url: str, max_posts: int = 5) -> List[Di
         # Try RSS feed first (most reliable)
         rss_url = f"{newsletter_url}/feed"
 
-        if not is_safe_url(rss_url):
-            print(f"Skipping unsafe RSS URL: {rss_url}")
-            return posts
-
-        feed = feedparser.parse(rss_url)
+        # Use safe_requests_get to prevent SSRF via redirects
+        response = safe_requests_get(rss_url, timeout=10)
+        feed = feedparser.parse(response.content)
         
         for entry in feed.entries[:max_posts]:
             # Get full content by scraping the actual post
@@ -90,6 +89,7 @@ def extract_substack_content(newsletter_url: str, max_posts: int = 5) -> List[Di
 
 def scrape_post_content(post_url: str) -> str:
     """Scrape full content from a Substack post"""
+    # URL check is handled inside safe_requests_get as well, but good to check early
     if not is_safe_url(post_url):
         print(f"Skipping unsafe post URL: {post_url}")
         return ""
@@ -99,8 +99,9 @@ def scrape_post_content(post_url: str) -> str:
             'User-Agent': 'Mozilla/5.0 (compatible; AI Research Bot/1.0)'
         }
         
-        # Use stream=True to prevent loading massive files into memory
-        with requests.get(post_url, headers=headers, timeout=10, stream=True) as response:
+        # Use safe_requests_get to prevent SSRF via redirects
+        # Note: safe_requests_get handles is_safe_url checks on redirects
+        with safe_requests_get(post_url, headers=headers, timeout=10, stream=True) as response:
             if response.status_code != 200:
                 return ""
 
