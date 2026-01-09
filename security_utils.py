@@ -1,6 +1,7 @@
 import ipaddress
 import socket
-from urllib.parse import urlparse
+import requests
+from urllib.parse import urlparse, urljoin
 
 def is_safe_url(url: str) -> bool:
     """
@@ -56,3 +57,61 @@ def is_safe_url(url: str) -> bool:
         return False
 
     return True
+
+def safe_requests_get(url: str, max_redirects: int = 5, **kwargs) -> requests.Response:
+    """
+    Safely makes a GET request, checking each redirect for SSRF.
+    This replaces requests.get() with a version that validates the URL and any subsequent redirects.
+
+    Args:
+        url: The initial URL to fetch
+        max_redirects: Maximum number of redirects to follow
+        **kwargs: Arguments to pass to requests.get (e.g., timeout, headers, stream)
+
+    Returns:
+        requests.Response: The final response object
+
+    Raises:
+        ValueError: If a URL (initial or redirected) is considered unsafe
+        requests.TooManyRedirects: If too many redirects are encountered
+    """
+    current_url = url
+    history = []
+
+    # Allow passing allow_redirects=False to disable following redirects completely
+    # But if it's not present or True, we handle it manually.
+    allow_redirects = kwargs.pop('allow_redirects', True)
+
+    # These parameters should only be sent with the initial request, not redirects
+    initial_only_params = {k: kwargs.pop(k) for k in ('params', 'data', 'json') if k in kwargs}
+
+    # We iterate max_redirects + 1 times (1 for initial request, + redirects)
+    for i in range(max_redirects + 1):
+        if not is_safe_url(current_url):
+            raise ValueError(f"Unsafe URL detected: {current_url}")
+
+        # Force allow_redirects to False so we can inspect the response
+        # Only pass params/data/json on the first request (i=0)
+        request_kwargs = kwargs.copy()
+        if i == 0:
+            request_kwargs.update(initial_only_params)
+
+        resp = requests.get(current_url, allow_redirects=False, **request_kwargs)
+
+        if resp.is_redirect and allow_redirects:
+            resp.close() # Close the connection as we're moving on
+
+            location = resp.headers.get('Location')
+            if not location:
+                # Redirect without location? treat as done.
+                return resp
+
+            # Handle relative redirects
+            current_url = urljoin(current_url, location)
+            history.append(resp)
+        else:
+            # Not a redirect, or redirects disabled. We are done.
+            resp.history = history
+            return resp
+
+    raise requests.TooManyRedirects(f"Exceeded maximum redirect limit of {max_redirects}")
