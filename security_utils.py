@@ -1,6 +1,7 @@
 import ipaddress
 import socket
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
+import requests
 
 def is_safe_url(url: str) -> bool:
     """
@@ -28,19 +29,13 @@ def is_safe_url(url: str) -> bool:
             return False
         return True
     except ValueError:
-        # Hostname is a domain, we need to be careful about DNS rebinding.
-        # Ideally, we would resolve here and use the IP for the request.
-        # Since we can't easily patch requests/feedparser to use a specific IP without
-        # complex changes, we will do a best-effort check here.
         pass
 
     if hostname.lower() in ('localhost',):
         return False
 
     # Optional: Resolve the domain to check if it points to a private IP.
-    # This protects against domains configured to point to 127.0.0.1 etc.
     try:
-        # valid domains can still resolve to private IPs
         addr_info = socket.getaddrinfo(hostname, None)
         for _, _, _, _, sockaddr in addr_info:
             ip = ipaddress.ip_address(sockaddr[0])
@@ -49,10 +44,60 @@ def is_safe_url(url: str) -> bool:
             if ip.is_multicast:
                 return False
     except socket.gaierror:
-        # If we can't resolve it, it's safer to reject, or accept and let the request fail.
-        # Blocking unresolved domains is safer for SSRF prevention.
         return False
     except Exception:
         return False
 
     return True
+
+def safe_requests_get(url: str, **kwargs) -> requests.Response:
+    """
+    Safely makes a GET request, checking for SSRF at every redirect.
+    Ensures that we don't follow redirects to private IPs.
+    """
+    # Force allow_redirects to False so we can control it
+    kwargs['allow_redirects'] = False
+
+    # Store params/data/json for the first request only
+    params = kwargs.pop('params', None)
+    data = kwargs.pop('data', None)
+    json_data = kwargs.pop('json', None)
+
+    current_url = url
+    history = []
+    max_redirects = 30
+
+    # Initial check
+    if not is_safe_url(current_url):
+        raise ValueError(f"Unsafe URL: {current_url}")
+
+    # First request
+    try:
+        response = requests.get(current_url, params=params, data=data, json=json_data, **kwargs)
+        history.append(response)
+
+        while response.is_redirect:
+            if len(history) > max_redirects:
+                raise requests.TooManyRedirects("Too many redirects")
+
+            location = response.headers.get('Location')
+            if not location:
+                break
+
+            next_url = urljoin(response.url, location)
+
+            if not is_safe_url(next_url):
+                raise ValueError(f"Unsafe redirect to: {next_url}")
+
+            current_url = next_url
+            response = requests.get(current_url, **kwargs)
+            history.append(response)
+
+        # Reconstruct history on the final response object
+        if len(history) > 1:
+             response.history = history[:-1]
+
+        return response
+
+    except requests.exceptions.RequestException as e:
+        raise e
