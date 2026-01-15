@@ -1,6 +1,7 @@
 import ipaddress
 import socket
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
+import requests
 
 def is_safe_url(url: str) -> bool:
     """
@@ -56,3 +57,70 @@ def is_safe_url(url: str) -> bool:
         return False
 
     return True
+
+def safe_requests_get(url: str, max_redirects: int = 5, **kwargs) -> requests.Response:
+    """
+    Performs a safe GET request by manually handling redirects and validating each URL.
+    This prevents SSRF attacks that bypass checks via redirects (e.g., http://safe.com -> http://localhost).
+
+    Args:
+        url: The initial URL to fetch.
+        max_redirects: Maximum number of redirects to follow.
+        **kwargs: Arguments passed to requests.get (e.g., timeout, headers).
+
+    Returns:
+        The final requests.Response object.
+
+    Raises:
+        ValueError: If a URL (initial or redirect) is unsafe or max redirects exceeded.
+    """
+    # Enforce validation on the initial URL
+    if not is_safe_url(url):
+        raise ValueError(f"Unsafe URL: {url}")
+
+    # Prevent requests from automatically following redirects
+    kwargs['allow_redirects'] = False
+
+    current_url = url
+    current_kwargs = kwargs.copy()
+
+    response = None
+
+    for _ in range(max_redirects + 1):
+        try:
+            response = requests.get(current_url, **current_kwargs)
+        except Exception as e:
+            # Rethrow or handle? Let's just let it bubble up, but maybe wrap context?
+            raise e
+
+        if response.is_redirect:
+            # It's a redirect (301, 302, 303, 307, 308)
+            location = response.headers.get('Location')
+            if not location:
+                return response
+
+            # Close the intermediate response
+            response.close()
+
+            # Resolve relative redirects
+            next_url = urljoin(current_url, location)
+
+            if not is_safe_url(next_url):
+                raise ValueError(f"Blocked redirect to unsafe URL: {next_url}")
+
+            current_url = next_url
+
+            # Strip params/data/json for the redirected request
+            if 'params' in current_kwargs:
+                del current_kwargs['params']
+            if 'data' in current_kwargs:
+                del current_kwargs['data']
+            if 'json' in current_kwargs:
+                del current_kwargs['json']
+
+            continue
+
+        # Not a redirect, return response
+        return response
+
+    raise ValueError(f"Too many redirects (max {max_redirects})")
