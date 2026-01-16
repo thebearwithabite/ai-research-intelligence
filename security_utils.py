@@ -1,6 +1,7 @@
 import ipaddress
 import socket
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
+import requests
 
 def is_safe_url(url: str) -> bool:
     """
@@ -28,19 +29,12 @@ def is_safe_url(url: str) -> bool:
             return False
         return True
     except ValueError:
-        # Hostname is a domain, we need to be careful about DNS rebinding.
-        # Ideally, we would resolve here and use the IP for the request.
-        # Since we can't easily patch requests/feedparser to use a specific IP without
-        # complex changes, we will do a best-effort check here.
         pass
 
     if hostname.lower() in ('localhost',):
         return False
 
-    # Optional: Resolve the domain to check if it points to a private IP.
-    # This protects against domains configured to point to 127.0.0.1 etc.
     try:
-        # valid domains can still resolve to private IPs
         addr_info = socket.getaddrinfo(hostname, None)
         for _, _, _, _, sockaddr in addr_info:
             ip = ipaddress.ip_address(sockaddr[0])
@@ -49,10 +43,45 @@ def is_safe_url(url: str) -> bool:
             if ip.is_multicast:
                 return False
     except socket.gaierror:
-        # If we can't resolve it, it's safer to reject, or accept and let the request fail.
-        # Blocking unresolved domains is safer for SSRF prevention.
         return False
     except Exception:
         return False
 
     return True
+
+def safe_requests_get(url: str, max_redirects: int = 5, **kwargs) -> requests.Response:
+    """
+    Safely performs a GET request, checking for SSRF at each redirect.
+    """
+    current_url = url
+    history = []
+
+    # Force allow_redirects to False so we can control them
+    kwargs['allow_redirects'] = False
+
+    for _ in range(max_redirects + 1):
+        if not is_safe_url(current_url):
+            raise ValueError(f"Security: Unsafe URL blocked: {current_url}")
+
+        resp = requests.get(current_url, **kwargs)
+        history.append(resp)
+
+        if resp.is_redirect:
+            location = resp.headers.get('Location')
+            if not location:
+                return resp
+
+            # Resolve relative URLs
+            next_url = urljoin(current_url, location)
+
+            # Close previous response body if not needed (unless we want to keep history bodies?)
+            # requests typically keeps them.
+            resp.close()
+
+            current_url = next_url
+        else:
+            # Reconstruct history
+            resp.history = history[:-1]
+            return resp
+
+    raise requests.TooManyRedirects("Exceeded maximum safe redirects")
