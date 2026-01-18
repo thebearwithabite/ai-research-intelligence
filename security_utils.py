@@ -1,6 +1,7 @@
 import ipaddress
 import socket
-from urllib.parse import urlparse
+import requests
+from urllib.parse import urlparse, urljoin
 
 def is_safe_url(url: str) -> bool:
     """
@@ -56,3 +57,69 @@ def is_safe_url(url: str) -> bool:
         return False
 
     return True
+
+def safe_requests_get(url: str, max_redirects: int = 5, **kwargs) -> requests.Response:
+    """
+    Performs a GET request while validating the URL and any redirects against SSRF.
+
+    Args:
+        url: The initial URL to fetch.
+        max_redirects: Maximum number of redirects to follow.
+        **kwargs: Additional arguments passed to requests.get.
+                  Note: 'allow_redirects' is forced to False.
+    """
+    if not is_safe_url(url):
+        raise ValueError(f"Unsafe URL: {url}")
+
+    # Ensure we don't automatically follow redirects
+    kwargs['allow_redirects'] = False
+
+    # Extract params/data/json to only send with the first request
+    params = kwargs.pop('params', None)
+    data = kwargs.pop('data', None)
+    json_data = kwargs.pop('json', None)
+
+    current_url = url
+    current_params = params
+    current_data = data
+    current_json = json_data
+
+    history = []
+
+    for _ in range(max_redirects + 1):
+        resp = requests.get(
+            current_url,
+            params=current_params,
+            data=current_data,
+            json=current_json,
+            **kwargs
+        )
+
+        # Clear sensitive data for subsequent requests (redirects)
+        current_params = None
+        current_data = None
+        current_json = None
+
+        if resp.is_redirect:
+            location = resp.headers.get('Location')
+            if not location:
+                return resp
+
+            next_url = urljoin(current_url, location)
+
+            if not is_safe_url(next_url):
+                resp.close()
+                raise ValueError(f"Blocked unsafe redirect to: {next_url}")
+
+            # Close the connection for the redirect response to avoid resource leaks
+            # but keep the object for history
+            resp.close()
+            history.append(resp)
+            current_url = next_url
+            continue
+        else:
+            # Attach history so it looks like a normal requests response
+            resp.history = history
+            return resp
+
+    raise requests.TooManyRedirects(f"Exceeded {max_redirects} redirects")
