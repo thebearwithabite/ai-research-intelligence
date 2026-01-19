@@ -5,3 +5,8 @@
 1. Enforce hard limits on all list inputs (e.g., `MAX_NEWSLETTERS`).
 2. Always use `requests.get(stream=True)` for user-provided URLs.
 3. Read the response stream in chunks and count bytes, aborting if the size exceeds a safety threshold (e.g., 2MB).
+
+## 2026-01-19 - [SSRF via HTTP Redirects]
+**Vulnerability:** `requests` and `feedparser` follow redirects by default, bypassing initial URL validation.
+**Learning:** Validating only the initial URL is insufficient. Attackers can use a safe URL that redirects to a private IP (e.g., cloud metadata services).
+**Prevention:** Implement a custom request wrapper that disables automatic redirects (`allow_redirects=False`) and manually validates the `Location` header of every redirect hop against an allowlist/blocklist.

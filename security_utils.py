@@ -1,6 +1,7 @@
 import ipaddress
 import socket
-from urllib.parse import urlparse
+import requests
+from urllib.parse import urlparse, urljoin
 
 def is_safe_url(url: str) -> bool:
     """
@@ -29,16 +30,12 @@ def is_safe_url(url: str) -> bool:
         return True
     except ValueError:
         # Hostname is a domain, we need to be careful about DNS rebinding.
-        # Ideally, we would resolve here and use the IP for the request.
-        # Since we can't easily patch requests/feedparser to use a specific IP without
-        # complex changes, we will do a best-effort check here.
         pass
 
     if hostname.lower() in ('localhost',):
         return False
 
     # Optional: Resolve the domain to check if it points to a private IP.
-    # This protects against domains configured to point to 127.0.0.1 etc.
     try:
         # valid domains can still resolve to private IPs
         addr_info = socket.getaddrinfo(hostname, None)
@@ -49,10 +46,59 @@ def is_safe_url(url: str) -> bool:
             if ip.is_multicast:
                 return False
     except socket.gaierror:
-        # If we can't resolve it, it's safer to reject, or accept and let the request fail.
-        # Blocking unresolved domains is safer for SSRF prevention.
         return False
     except Exception:
         return False
 
     return True
+
+def safe_requests_get(url: str, max_redirects=5, **kwargs) -> requests.Response:
+    """
+    Safely performs a GET request, validating the initial URL and any redirects
+    against is_safe_url. Prevents SSRF via redirects.
+
+    Uses a Session to persist cookies across redirects.
+    """
+    if not is_safe_url(url):
+        raise ValueError(f"Unsafe URL: {url}")
+
+    # We use a session to persist cookies across redirects, similar to how
+    # requests.get handles them internally.
+    session = requests.Session()
+
+    # Ensure allow_redirects is False so we can check each hop
+    kwargs['allow_redirects'] = False
+
+    current_url = url
+    redirects_followed = 0
+
+    try:
+        while redirects_followed <= max_redirects:
+            resp = session.get(current_url, **kwargs)
+
+            if resp.is_redirect:
+                redirects_followed += 1
+                location = resp.headers.get('Location')
+                if not location:
+                    return resp
+
+                # Close the content for the redirect response since we're following
+                resp.close()
+
+                # Resolve relative URLs
+                next_url = urljoin(current_url, location)
+
+                # Validate the new URL
+                if not is_safe_url(next_url):
+                    raise ValueError(f"Redirect to unsafe URL: {next_url}")
+
+                current_url = next_url
+                continue
+
+            return resp
+
+        raise ValueError(f"Too many redirects (limit {max_redirects})")
+
+    except Exception:
+        session.close()
+        raise
