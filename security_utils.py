@@ -1,6 +1,7 @@
 import ipaddress
 import socket
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
+import requests
 
 def is_safe_url(url: str) -> bool:
     """
@@ -56,3 +57,63 @@ def is_safe_url(url: str) -> bool:
         return False
 
     return True
+
+def safe_requests_get(url: str, max_redirects: int = 5, **kwargs) -> requests.Response:
+    """
+    Performs a safe GET request that validates every redirect to prevent SSRF.
+    Args:
+        url: The URL to fetch.
+        max_redirects: Maximum number of redirects to follow.
+        **kwargs: Arguments to pass to requests.get (e.g. timeout, headers, stream).
+    Returns:
+        The final response object.
+    Raises:
+        ValueError: If the URL or any redirect is unsafe.
+        requests.TooManyRedirects: If too many redirects.
+    """
+    if not is_safe_url(url):
+        raise ValueError(f"Unsafe URL blocked: {url}")
+
+    # Force allow_redirects=False to handle them manually
+    kwargs['allow_redirects'] = False
+
+    session = requests.Session()
+    current_url = url
+    history = []
+
+    for _ in range(max_redirects + 1):
+        response = session.get(current_url, **kwargs)
+
+        if response.is_redirect:
+            # We must close the response content if we're not returning it,
+            # especially if stream=True, to free connections.
+            response.close()
+
+            location = response.headers.get('Location')
+            if not location:
+                # Should not happen if is_redirect is True, but strictly speaking possible
+                return response
+
+            # history logic for requests is that the history list contains the responses
+            # that led to the final response.
+            history.append(response)
+
+            next_url = urljoin(current_url, location)
+
+            if not is_safe_url(next_url):
+                 raise ValueError(f"Unsafe redirect blocked: {next_url}")
+
+            current_url = next_url
+
+            # Remove params if they were passed in kwargs, so they don't get
+            # appended again to the next request (which already has them in the URL)
+            if 'params' in kwargs:
+                del kwargs['params']
+
+            continue
+        else:
+            # Not a redirect, return response
+            response.history = history
+            return response
+
+    raise requests.TooManyRedirects(f"Exceeded maximum redirects: {max_redirects}")
