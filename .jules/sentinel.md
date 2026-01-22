@@ -5,3 +5,11 @@
 1. Enforce hard limits on all list inputs (e.g., `MAX_NEWSLETTERS`).
 2. Always use `requests.get(stream=True)` for user-provided URLs.
 3. Read the response stream in chunks and count bytes, aborting if the size exceeds a safety threshold (e.g., 2MB).
+
+## 2026-01-22 - [SSRF via HTTP Redirects]
+**Vulnerability:** The application validated URLs against private IPs before requesting, but used standard `requests.get` which follows redirects by default. An attacker could provide a safe URL (e.g., `http://attacker.com`) that redirects to a private IP (e.g., `http://169.254.169.254`), bypassing the initial check (Time-of-Check Time-of-Use).
+**Learning:** Validating only the initial URL is insufficient for SSRF protection when using libraries that automatically follow redirects.
+**Prevention:**
+1. Disable automatic redirects (`allow_redirects=False`).
+2. Manually handle redirects in a loop.
+3. Validate the `Location` header of every redirect hop against the allowlist/blocklist before following it.
