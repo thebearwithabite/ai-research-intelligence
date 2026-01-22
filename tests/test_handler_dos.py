@@ -11,7 +11,7 @@ class TestHandlerDoS(unittest.TestCase):
         mock_analyze.return_value = {}
 
         # 1. Too many newsletters
-        many_newsletters = [f"http://example.com/{i}" for i in range(MAX_NEWSLETTERS + 1)]
+        many_newsletters = [f"http://example.com/{i}" for i in range(MAX_NEWSLETTERS + 5)]
         event = {
             'input': {
                 'newsletters': many_newsletters,
@@ -21,13 +21,12 @@ class TestHandlerDoS(unittest.TestCase):
 
         result = handler(event)
 
-        # Expect error
+        # Expect success (truncation), not error
         self.assertIsInstance(result, dict)
-        self.assertIn("error", result)
-        self.assertIn(f"Max allowed: {MAX_NEWSLETTERS}", result["error"])
+        self.assertNotIn("error", result)
 
-        # Verify no processing happened
-        mock_extract.assert_not_called()
+        # Verify it capped the newsletters
+        self.assertEqual(result['newsletters_scanned'], MAX_NEWSLETTERS)
 
     @patch('handler.extract_substack_content')
     @patch('handler.analyze_research_intelligence')
@@ -40,19 +39,18 @@ class TestHandlerDoS(unittest.TestCase):
         event = {
             'input': {
                 'newsletters': ['http://example.com/1'],
-                'posts_per_newsletter': MAX_POSTS_PER_NEWSLETTER + 1
+                'posts_per_newsletter': MAX_POSTS_PER_NEWSLETTER + 5
             }
         }
 
         result = handler(event)
 
-        # Expect error
+        # Expect success (capping), not error
         self.assertIsInstance(result, dict)
-        self.assertIn("error", result)
-        self.assertIn(f"Max allowed: {MAX_POSTS_PER_NEWSLETTER}", result["error"])
+        self.assertNotIn("error", result)
 
-        # Verify no processing happened
-        mock_extract.assert_not_called()
+        # Verify extract was called with capped limit
+        mock_extract.assert_called_with('http://example.com/1', MAX_POSTS_PER_NEWSLETTER)
 
     @patch('handler.extract_substack_content')
     @patch('handler.analyze_research_intelligence')
