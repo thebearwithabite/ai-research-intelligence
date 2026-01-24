@@ -1,6 +1,7 @@
 import ipaddress
 import socket
-from urllib.parse import urlparse
+import requests
+from urllib.parse import urlparse, urljoin
 
 def is_safe_url(url: str) -> bool:
     """
@@ -56,3 +57,40 @@ def is_safe_url(url: str) -> bool:
         return False
 
     return True
+
+def safe_requests_get(url: str, max_redirects=5, **kwargs) -> requests.Response:
+    """
+    Safely performs a GET request, checking is_safe_url for every redirect.
+    Prevent SSRF by validating the destination of every redirect.
+    """
+    current_url = url
+
+    # Check initial URL
+    if not is_safe_url(current_url):
+        raise ValueError(f"Unsafe URL: {current_url}")
+
+    # Ensure allow_redirects is False so we can manually handle them
+    kwargs['allow_redirects'] = False
+
+    for _ in range(max_redirects + 1):
+        resp = requests.get(current_url, **kwargs)
+
+        if resp.is_redirect:
+            location = resp.headers.get('Location')
+            if not location:
+                return resp
+
+            # Handle relative redirects
+            next_url = urljoin(current_url, location)
+
+            if not is_safe_url(next_url):
+                 resp.close()
+                 raise ValueError(f"Unsafe redirect to: {next_url}")
+
+            resp.close() # Close intermediate response
+            current_url = next_url
+            continue
+
+        return resp
+
+    raise requests.TooManyRedirects("Exceeded maximum safe redirects")
