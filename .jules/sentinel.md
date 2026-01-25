@@ -5,3 +5,11 @@
 1. Enforce hard limits on all list inputs (e.g., `MAX_NEWSLETTERS`).
 2. Always use `requests.get(stream=True)` for user-provided URLs.
 3. Read the response stream in chunks and count bytes, aborting if the size exceeds a safety threshold (e.g., 2MB).
+
+## 2026-01-25 - [SSRF Protection via Safe Request Handling]
+**Vulnerability:** The application was vulnerable to Server-Side Request Forgery (SSRF) because `feedparser` and `requests.get` (without custom redirect handling) follow redirects automatically. An attacker could provide a safe-looking initial URL (e.g., `https://example.com`) that redirects to an internal service (e.g., `http://127.0.0.1:8080/secret`), bypassing the initial `is_safe_url` check.
+**Learning:** Checking a URL once before the request is insufficient because redirects can lead to unsafe targets. Python's `requests` library follows redirects by default, exposing the application to this risk.
+**Prevention:**
+1. Implement a wrapper function (e.g., `safe_requests_get`) that disables automatic redirects (`allow_redirects=False`).
+2. Manually follow redirects in a loop, validating the `Location` header against the allowlist/blocklist (`is_safe_url`) at every step.
+3. Use `requests.Session()` to persist cookies across these manual redirect steps if needed.
