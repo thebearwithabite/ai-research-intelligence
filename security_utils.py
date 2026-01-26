@@ -1,6 +1,7 @@
 import ipaddress
 import socket
-from urllib.parse import urlparse
+import requests
+from urllib.parse import urlparse, urljoin
 
 def is_safe_url(url: str) -> bool:
     """
@@ -56,3 +57,48 @@ def is_safe_url(url: str) -> bool:
         return False
 
     return True
+
+def safe_requests_get(url: str, max_redirects: int = 5, **kwargs) -> requests.Response:
+    """
+    Safely performs a GET request, checking for SSRF at every redirect.
+    Mitigates SSRF by validating the 'Location' header of redirects against allowlists/blocklists.
+    """
+    current_url = url
+
+    # Ensure allow_redirects is False so we handle them manually
+    kwargs['allow_redirects'] = False
+
+    # We use a session to persist cookies across redirects, which mimics standard browser/requests behavior
+    with requests.Session() as session:
+        for _ in range(max_redirects + 1):
+            if not is_safe_url(current_url):
+                raise ValueError(f"Unsafe URL blocked: {current_url}")
+
+            try:
+                # Use session.request to keep cookies
+                response = session.get(current_url, **kwargs)
+
+                if response.is_redirect:
+                    location = response.headers.get('Location')
+                    if not location:
+                        return response
+
+                    # Handle relative redirects
+                    previous_url = current_url
+                    current_url = urljoin(current_url, location)
+
+                    # Consuming the content of intermediate responses is good practice
+                    # to allow the connection to be reused, unless we are streaming?
+                    # If streaming, we shouldn't read content, but for redirects, the body is usually empty/small.
+                    # It's safe to read content of redirects.
+                    response.content
+
+                    # Continue to next iteration
+                    continue
+                else:
+                    return response
+
+            except requests.RequestException as e:
+                raise e
+
+    raise requests.TooManyRedirects(f"Exceeded maximum of {max_redirects} redirects")
