@@ -1,6 +1,7 @@
 import ipaddress
 import socket
-from urllib.parse import urlparse
+import requests
+from urllib.parse import urlparse, urljoin
 
 def is_safe_url(url: str) -> bool:
     """
@@ -56,3 +57,47 @@ def is_safe_url(url: str) -> bool:
         return False
 
     return True
+
+def safe_requests_get(url, max_redirects=5, **kwargs):
+    """
+    Safely makes a GET request, checking for SSRF at each redirect.
+    """
+    if not is_safe_url(url):
+        raise ValueError(f"Unsafe URL: {url}")
+
+    # We handle redirects manually to check each hop
+    kwargs['allow_redirects'] = False
+
+    current_url = url
+    visited_urls = {current_url}
+
+    for _ in range(max_redirects + 1):
+        try:
+            resp = requests.get(current_url, **kwargs)
+        except requests.RequestException as e:
+            raise e
+
+        if resp.is_redirect:
+            # It's a redirect, we must close the response to release connection if streaming
+            resp.close()
+
+            location = resp.headers.get('Location')
+            if not location:
+                return resp
+
+            next_url = urljoin(current_url, location)
+
+            if not is_safe_url(next_url):
+                 raise ValueError(f"Unsafe redirect to: {next_url}")
+
+            if next_url in visited_urls:
+                raise requests.TooManyRedirects(f"Infinite redirect loop detected: {next_url}")
+
+            visited_urls.add(next_url)
+            current_url = next_url
+            continue
+
+        # Not a redirect, return the response
+        return resp
+
+    raise requests.TooManyRedirects("Exceeded maximum redirects")
