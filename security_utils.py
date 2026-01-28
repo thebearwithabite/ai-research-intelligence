@@ -1,6 +1,7 @@
 import ipaddress
 import socket
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
+import requests
 
 def is_safe_url(url: str) -> bool:
     """
@@ -56,3 +57,53 @@ def is_safe_url(url: str) -> bool:
         return False
 
     return True
+
+def safe_requests_get(url: str, max_redirects: int = 5, **kwargs) -> requests.Response:
+    """
+    Safely performs a GET request with SSRF protection.
+    Follows redirects manually and checks is_safe_url for each hop.
+    Strips 'Authorization' header if redirecting to a different hostname.
+    """
+    current_url = url
+    # Force allow_redirects to False to handle them manually
+    kwargs['allow_redirects'] = False
+
+    for _ in range(max_redirects + 1):
+        if not is_safe_url(current_url):
+            raise ValueError(f"Unsafe URL detected: {current_url}")
+
+        try:
+            response = requests.get(current_url, **kwargs)
+        except requests.RequestException as e:
+            # Re-raise request exceptions
+            raise e
+
+        if response.is_redirect:
+            location = response.headers.get('Location')
+            if not location:
+                return response
+
+            # Close the response if we are redirecting and not returning it
+            response.close()
+
+            previous_url = current_url
+            current_url = urljoin(current_url, location)
+
+            # Strip Authorization header if hostname changes
+            if 'headers' in kwargs and 'Authorization' in kwargs['headers']:
+                prev_parsed = urlparse(previous_url)
+                curr_parsed = urlparse(current_url)
+
+                if prev_parsed.hostname != curr_parsed.hostname:
+                    # Copy headers to avoid modifying the original dictionary if passed by caller
+                    # (though here we are in a loop, so we modify our copy)
+                    # We need to make sure we don't mutate caller's dict unexpectedly?
+                    # kwargs['headers'] is a reference.
+                    # Safer to copy it.
+                    headers = kwargs['headers'].copy()
+                    del headers['Authorization']
+                    kwargs['headers'] = headers
+        else:
+            return response
+
+    raise ValueError(f"Too many redirects (max {max_redirects})")
