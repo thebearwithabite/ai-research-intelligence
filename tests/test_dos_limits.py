@@ -18,10 +18,12 @@ class TestHandlerDoS(unittest.TestCase):
             }
         }
 
-        handler(event)
+        result = handler(event)
 
-        # Verify that extract_substack_content was called with the CAPPED number
-        mock_extract.assert_called_with('https://example.com', MAX_POSTS_PER_NEWSLETTER)
+        # Verify that it returns an error instead of capping
+        self.assertIn("error", result)
+        self.assertIn("Too many posts per newsletter", result["error"])
+        mock_extract.assert_not_called()
 
     @patch('handler.extract_substack_content')
     @patch('handler.analyze_research_intelligence')
@@ -38,10 +40,12 @@ class TestHandlerDoS(unittest.TestCase):
             }
         }
 
-        handler(event)
+        result = handler(event)
 
-        # Verify it processed only MAX_NEWSLETTERS
-        self.assertEqual(mock_extract.call_count, MAX_NEWSLETTERS)
+        # Verify that it returns an error instead of truncating
+        self.assertIn("error", result)
+        self.assertIn("Too many newsletters", result["error"])
+        mock_extract.assert_not_called()
 
 if __name__ == '__main__':
     unittest.main()
