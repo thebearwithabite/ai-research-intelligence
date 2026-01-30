@@ -1,6 +1,8 @@
 import ipaddress
 import socket
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
+import requests
+from requests.exceptions import RequestException
 
 def is_safe_url(url: str) -> bool:
     """
@@ -56,3 +58,57 @@ def is_safe_url(url: str) -> bool:
         return False
 
     return True
+
+def safe_requests_get(url: str, max_redirects: int = 5, **kwargs) -> requests.Response:
+    """
+    Safe version of requests.get that prevents SSRF via redirects.
+    Validates the URL and every redirect location against is_safe_url.
+    """
+    if not is_safe_url(url):
+        raise ValueError(f"Unsafe URL: {url}")
+
+    # Disable automatic redirects
+    kwargs['allow_redirects'] = False
+
+    current_url = url
+    session = requests.Session()
+
+    for _ in range(max_redirects + 1):
+        resp = session.get(current_url, **kwargs)
+
+        if resp.is_redirect:
+            # If we are redirecting, we should close the response to free connection
+            resp.close()
+
+            location = resp.headers.get('Location')
+            if not location:
+                break
+
+            # Handle relative redirects
+            next_url = urljoin(current_url, location)
+
+            if not is_safe_url(next_url):
+                raise ValueError(f"Unsafe redirect to: {next_url}")
+
+            # Prevent credential leaking on cross-origin redirects
+            # If the domain changes, we should strip Authorization header if it was manually passed.
+            # But implementing that fully correctly requires comparing domains.
+            # For now, we assume the user of this function is aware, or we can implement a basic strip.
+
+            # Simple strip of Authorization on domain mismatch
+            original_parsed = urlparse(current_url)
+            next_parsed = urlparse(next_url)
+
+            if original_parsed.netloc != next_parsed.netloc:
+                if 'headers' in kwargs and 'Authorization' in kwargs['headers']:
+                    # Remove Authorization from kwargs for subsequent requests
+                    # Copy headers to avoid mutating original dict if it's reused by caller
+                    kwargs['headers'] = kwargs['headers'].copy()
+                    del kwargs['headers']['Authorization']
+
+            current_url = next_url
+            continue
+
+        return resp
+
+    raise RequestException("Too many redirects")
