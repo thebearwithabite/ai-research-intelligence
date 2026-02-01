@@ -1,6 +1,7 @@
 import ipaddress
 import socket
-from urllib.parse import urlparse
+import requests
+from urllib.parse import urlparse, urljoin
 
 def is_safe_url(url: str) -> bool:
     """
@@ -56,3 +57,53 @@ def is_safe_url(url: str) -> bool:
         return False
 
     return True
+
+def safe_requests_get(url, max_redirects=5, **kwargs):
+    """
+    Safely performs a GET request, validating every redirect against SSRF.
+    This replaces requests.get() for fetching untrusted URLs.
+
+    Args:
+        url: The URL to fetch
+        max_redirects: Maximum number of redirects to follow
+        **kwargs: Arguments to pass to requests.get (e.g. timeout, stream, headers)
+
+    Returns:
+        requests.Response object
+
+    Raises:
+        ValueError: If the URL is unsafe or too many redirects occur
+    """
+    if not is_safe_url(url):
+        raise ValueError(f"Unsafe URL: {url}")
+
+    current_url = url
+
+    # We manually handle redirects
+    kwargs['allow_redirects'] = False
+
+    for _ in range(max_redirects + 1):
+        try:
+            response = requests.get(current_url, **kwargs)
+        except requests.RequestException as e:
+            # Re-raise as is or handle? Let's propagate requests exceptions
+            raise e
+
+        if response.is_redirect:
+            location = response.headers.get('Location')
+            if not location:
+                return response
+
+            # Resolve relative URLs
+            next_url = urljoin(current_url, location)
+
+            if not is_safe_url(next_url):
+                # We specifically block unsafe redirects here
+                raise ValueError(f"Unsafe redirect to: {next_url}")
+
+            current_url = next_url
+            continue
+
+        return response
+
+    raise ValueError(f"Too many redirects (limit: {max_redirects})")
