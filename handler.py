@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 import socket
 import ipaddress
 from urllib.parse import urlparse
+from security_utils import is_safe_url, safe_requests_get
 
 # Configuration
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
@@ -55,11 +56,20 @@ def extract_substack_content(newsletter_url: str, max_posts: int = 5) -> List[Di
         # Try RSS feed first (most reliable)
         rss_url = f"{newsletter_url}/feed"
 
-        if not is_safe_url(rss_url):
-            print(f"Skipping unsafe RSS URL: {rss_url}")
-            return posts
+        # Fetch RSS content safely
+        try:
+             response = safe_requests_get(rss_url, timeout=10)
+             if response.status_code != 200:
+                 print(f"Failed to fetch RSS: {rss_url} (Status: {response.status_code})")
+                 response.close()
+                 return posts
+             rss_content = response.content
+             response.close()
+        except Exception as e:
+             print(f"Error fetching RSS {rss_url}: {e}")
+             return posts
 
-        feed = feedparser.parse(rss_url)
+        feed = feedparser.parse(rss_content)
         
         for entry in feed.entries[:max_posts]:
             # Get full content by scraping the actual post
@@ -100,7 +110,8 @@ def scrape_post_content(post_url: str) -> str:
         }
         
         # Use stream=True to prevent loading massive files into memory
-        with requests.get(post_url, headers=headers, timeout=10, stream=True) as response:
+        # Using safe_requests_get to prevent SSRF
+        with safe_requests_get(post_url, headers=headers, timeout=10, stream=True) as response:
             if response.status_code != 200:
                 return ""
 
