@@ -1,6 +1,7 @@
 import ipaddress
 import socket
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
+import requests
 
 def is_safe_url(url: str) -> bool:
     """
@@ -56,3 +57,47 @@ def is_safe_url(url: str) -> bool:
         return False
 
     return True
+
+def safe_requests_get(url: str, max_redirects: int = 5, **kwargs) -> requests.Response:
+    """
+    Safely makes a GET request, checking for SSRF at every redirect.
+    Enforces allow_redirects=False to handle redirects manually.
+    """
+    if kwargs.get('allow_redirects'):
+        raise ValueError("safe_requests_get handles redirects manually; do not set allow_redirects=True")
+
+    kwargs['allow_redirects'] = False
+
+    # Default timeout if not provided
+    if 'timeout' not in kwargs:
+        kwargs['timeout'] = 10
+
+    current_url = url
+    redirects = 0
+
+    while redirects <= max_redirects:
+        if not is_safe_url(current_url):
+            raise ValueError(f"Unsafe URL detected: {current_url}")
+
+        # If stream=True is passed, we must be careful not to download bodies of redirects
+        # intermediate requests should probably be stream=True as well to avoid downloading body
+        # but let's just pass kwargs as is.
+        response = requests.get(current_url, **kwargs)
+
+        if response.is_redirect:
+            # Close intermediate response
+            response.close()
+
+            location = response.headers.get('Location')
+            if not location:
+                # Should not happen for 3xx responses
+                break
+
+            # Handle relative redirects
+            current_url = urljoin(current_url, location)
+            redirects += 1
+            continue
+
+        return response
+
+    raise ValueError("Too many redirects")
