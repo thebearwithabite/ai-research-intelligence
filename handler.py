@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 import socket
 import ipaddress
 from urllib.parse import urlparse
+from security_utils import is_safe_url, safe_requests_get
 
 # Configuration
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
@@ -55,11 +56,12 @@ def extract_substack_content(newsletter_url: str, max_posts: int = 5) -> List[Di
         # Try RSS feed first (most reliable)
         rss_url = f"{newsletter_url}/feed"
 
-        if not is_safe_url(rss_url):
-            print(f"Skipping unsafe RSS URL: {rss_url}")
+        rss_response = safe_requests_get(rss_url, timeout=10)
+        if not rss_response or rss_response.status_code != 200:
+            print(f"Skipping unsafe or failed RSS URL: {rss_url}")
             return posts
 
-        feed = feedparser.parse(rss_url)
+        feed = feedparser.parse(rss_response.content)
         
         for entry in feed.entries[:max_posts]:
             # Get full content by scraping the actual post
@@ -100,7 +102,11 @@ def scrape_post_content(post_url: str) -> str:
         }
         
         # Use stream=True to prevent loading massive files into memory
-        with requests.get(post_url, headers=headers, timeout=10, stream=True) as response:
+        response = safe_requests_get(post_url, headers=headers, timeout=10, stream=True)
+        if not response:
+            return ""
+
+        with response:
             if response.status_code != 200:
                 return ""
 
@@ -294,15 +300,10 @@ def handler(event):
     # Configuration from input
     newsletters = job_input.get('newsletters', list(RESEARCH_TARGETS.values()))
     # Enforce limit on number of newsletters
-    if len(newsletters) > MAX_NEWSLETTERS:
-        print(f"⚠️ Truncating newsletters list from {len(newsletters)} to {MAX_NEWSLETTERS}")
-        newsletters = newsletters[:MAX_NEWSLETTERS]
+    # Limits are enforced via error return below
 
     posts_per_newsletter = job_input.get('posts_per_newsletter', 3)
-    # Enforce limit on posts per newsletter
-    if posts_per_newsletter > MAX_POSTS_PER_NEWSLETTER:
-        print(f"⚠️ Capping posts_per_newsletter from {posts_per_newsletter} to {MAX_POSTS_PER_NEWSLETTER}")
-        posts_per_newsletter = MAX_POSTS_PER_NEWSLETTER
+    # Limits are enforced via error return below
 
     include_outreach_strategy = job_input.get('include_outreach_strategy', True)
 
