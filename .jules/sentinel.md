@@ -5,3 +5,10 @@
 1. Enforce hard limits on all list inputs (e.g., `MAX_NEWSLETTERS`).
 2. Always use `requests.get(stream=True)` for user-provided URLs.
 3. Read the response stream in chunks and count bytes, aborting if the size exceeds a safety threshold (e.g., 2MB).
+
+## 2026-02-06 - [SSRF via feedparser and Requests Redirects]
+**Vulnerability:** `feedparser.parse()` and `requests.get()` were used with user-provided URLs. `feedparser` handles fetches internally without SSRF protection, and standard `requests` follows redirects automatically, bypassing initial `is_safe_url` checks if the target redirects to a private IP (e.g. AWS Metadata).
+**Learning:** Initial URL validation is insufficient. Libraries that handle their own fetching (like `feedparser`) often lack SSRF controls. Redirects are a major bypass vector.
+**Prevention:**
+1. Fetch content explicitly using a secured HTTP client before passing to parsers like `feedparser`.
+2. Disable automatic redirects (`allow_redirects=False`) and manually validate the `Location` header against the allowlist/blocklist for every hop.

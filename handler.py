@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 import socket
 import ipaddress
 from urllib.parse import urlparse
+from security_utils import is_safe_url, safe_requests_get
 
 # Configuration
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
@@ -55,11 +56,12 @@ def extract_substack_content(newsletter_url: str, max_posts: int = 5) -> List[Di
         # Try RSS feed first (most reliable)
         rss_url = f"{newsletter_url}/feed"
 
-        if not is_safe_url(rss_url):
-            print(f"Skipping unsafe RSS URL: {rss_url}")
+        try:
+            response = safe_requests_get(rss_url, timeout=10)
+            feed = feedparser.parse(response.content)
+        except Exception as e:
+            print(f"Error fetching/parsing RSS {rss_url}: {e}")
             return posts
-
-        feed = feedparser.parse(rss_url)
         
         for entry in feed.entries[:max_posts]:
             # Get full content by scraping the actual post
@@ -100,18 +102,23 @@ def scrape_post_content(post_url: str) -> str:
         }
         
         # Use stream=True to prevent loading massive files into memory
-        with requests.get(post_url, headers=headers, timeout=10, stream=True) as response:
-            if response.status_code != 200:
-                return ""
+        # safe_requests_get handles is_safe_url check for redirects too
+        try:
+            with safe_requests_get(post_url, headers=headers, timeout=10, stream=True) as response:
+                if response.status_code != 200:
+                    return ""
 
-            # Read only the first N bytes to prevent DoS via massive content
-            content_bytes = b""
-            for chunk in response.iter_content(chunk_size=8192):
-                content_bytes += chunk
-                if len(content_bytes) > MAX_RESPONSE_SIZE_BYTES:
-                    break
+                # Read only the first N bytes to prevent DoS via massive content
+                content_bytes = b""
+                for chunk in response.iter_content(chunk_size=8192):
+                    content_bytes += chunk
+                    if len(content_bytes) > MAX_RESPONSE_SIZE_BYTES:
+                        break
 
-            soup = BeautifulSoup(content_bytes, 'html.parser')
+                soup = BeautifulSoup(content_bytes, 'html.parser')
+        except Exception as e:
+            print(f"Error scraping {post_url}: {str(e)}")
+            return ""
             
             # Find the main content area (Substack specific)
             content_div = soup.find('div', class_='post-content')
@@ -293,17 +300,7 @@ def handler(event):
     
     # Configuration from input
     newsletters = job_input.get('newsletters', list(RESEARCH_TARGETS.values()))
-    # Enforce limit on number of newsletters
-    if len(newsletters) > MAX_NEWSLETTERS:
-        print(f"⚠️ Truncating newsletters list from {len(newsletters)} to {MAX_NEWSLETTERS}")
-        newsletters = newsletters[:MAX_NEWSLETTERS]
-
     posts_per_newsletter = job_input.get('posts_per_newsletter', 3)
-    # Enforce limit on posts per newsletter
-    if posts_per_newsletter > MAX_POSTS_PER_NEWSLETTER:
-        print(f"⚠️ Capping posts_per_newsletter from {posts_per_newsletter} to {MAX_POSTS_PER_NEWSLETTER}")
-        posts_per_newsletter = MAX_POSTS_PER_NEWSLETTER
-
     include_outreach_strategy = job_input.get('include_outreach_strategy', True)
 
     # Security validation
